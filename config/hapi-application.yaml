@@ -1,0 +1,102 @@
+# =============================================================================
+# HAPI FHIR Server — Spring Boot Application Configuration
+# =============================================================================
+# Optimized for the Shared Health Record (SHR) use case:
+#   - High write-throughput for clinical transaction bundles.
+#   - PostgreSQL 15 backend with connection pooling.
+#   - FHIR R4 with full narrative generation and bundle processing.
+# =============================================================================
+
+spring:
+  datasource:
+    # JDBC connection to the co-located shr-postgres container.
+    url: jdbc:postgresql://shr-postgres:5432/shr_hapi
+    username: shr_admin
+    password: shr_secret_password
+    driverClassName: org.postgresql.Driver
+
+    # HikariCP connection pool — tuned for high-concurrency clinical writes.
+    hikari:
+      maximum-pool-size: 50
+      minimum-idle: 10
+      idle-timeout: 300000       # 5 minutes
+      connection-timeout: 30000  # 30 seconds
+      max-lifetime: 1800000     # 30 minutes
+
+  jpa:
+    properties:
+      hibernate:
+        # Batched inserts for transaction bundles — critical for performance.
+        jdbc.batch_size: 50
+        order_inserts: true
+        order_updates: true
+        generate_statistics: false
+        # Use the PostgreSQL-optimised dialect.
+        dialect: ca.uhn.fhir.jpa.model.dialect.HapiFhirPostgres94Dialect
+        format_sql: false
+        show_sql: false
+        hbm2ddl.auto: update
+        # Second-level cache disabled to avoid stale reads in a multi-writer env.
+        cache:
+          use_second_level_cache: false
+          use_query_cache: false
+
+  batch:
+    # Disable Spring Batch auto-start; HAPI manages its own jobs.
+    job:
+      enabled: false
+
+# =============================================================================
+# HAPI FHIR Server-Specific Settings
+# =============================================================================
+hapi:
+  fhir:
+    # FHIR version: R4 (4.0.1) — the current standard for the OpenFMR HIE.
+    fhir_version: R4
+
+    # --- Server Metadata ----------------------------------------------------
+    server_address: http://shr-fhir-server:8080/fhir
+    server_name: "OpenFMR Shared Health Record (SHR)"
+    server_id: openfmr-shr
+
+    # --- Narrative Generation ------------------------------------------------
+    narrative_enabled: true
+
+    # --- Bundle & Transaction Processing -------------------------------------
+    # Allow large transaction bundles from EMR ingestion.
+    max_page_size: 500
+    default_page_size: 100
+
+    # Raise the per-bundle entry limit for bulk clinical submissions.
+    bundle_batch_pool_size: 10
+    max_binary_size: 104857600  # 100 MB
+
+    # --- Performance Tuning --------------------------------------------------
+    # Enable bulk export and reindex operations.
+    bulk_export_enabled: true
+    allow_multiple_delete: true
+    allow_external_references: true
+    reuse_cached_search_results_millis: 60000  # 1 minute
+
+    # Inline resource references for faster read-back after writes.
+    auto_create_placeholder_reference_targets: true
+
+    # --- Advanced Indexing ---------------------------------------------------
+    # Enable advanced search parameter indexing for complex clinical queries.
+    advanced_lucene_indexing: false
+
+    # --- CORS Configuration --------------------------------------------------
+    cors:
+      allow_credentials: true
+      allowed_origin:
+        - "*"
+
+    # --- Logging & Monitoring ------------------------------------------------
+    client_id_mode: ALPHANUMERIC
+
+    # --- Validation ----------------------------------------------------------
+    # Validation is intentionally relaxed at the SHR FHIR server level.
+    # The Ingestion Engine handles business-rule validation upstream.
+    validation:
+      requests_enabled: false
+      responses_enabled: false

@@ -1,0 +1,123 @@
+# =============================================================================
+# OpenFMR Module: Shared Health Record (SHR)
+# =============================================================================
+# This docker-compose file defines the SHR clinical module, which acts as the
+# central shared clinical data repository for the OpenFMR HIE. It consists of:
+#   1. A PostgreSQL database for persistent FHIR storage.
+#   2. A HAPI FHIR R4 server as the clinical data repository.
+#   3. A Python-based Ingestion Engine (FastAPI) that acts as a gatekeeper,
+#      validating external references (Patient from CR, Facility from HFR)
+#      before persisting clinical bundles into the SHR.
+#
+# All services attach to the shared 'openfmr_global_net' Docker network,
+# enabling cross-module communication with the Client Registry (CR),
+# Health Facility Registry (HFR), and other OpenFMR modules.
+# =============================================================================
+
+version: "3.9"
+
+services:
+  # ---------------------------------------------------------------------------
+  # Service 1: PostgreSQL Database for the SHR HAPI FHIR Server
+  # ---------------------------------------------------------------------------
+  shr-postgres:
+    image: postgres:15
+    container_name: shr-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${SHR_POSTGRES_DB:-shr_hapi}
+      POSTGRES_USER: ${SHR_POSTGRES_USER:-shr_admin}
+      POSTGRES_PASSWORD: ${SHR_POSTGRES_PASSWORD:-shr_secret_password}
+    # High-performance tuning flags for clinical write-heavy workloads.
+    command: >
+      postgres
+        -c max_connections=200
+        -c shared_buffers=512MB
+        -c effective_cache_size=1536MB
+        -c work_mem=16MB
+        -c maintenance_work_mem=256MB
+        -c wal_buffers=16MB
+        -c checkpoint_completion_target=0.9
+        -c random_page_cost=1.1
+        -c effective_io_concurrency=200
+        -c log_min_duration_statement=500
+    volumes:
+      - shr-postgres-data:/var/lib/postgresql/data
+    networks:
+      - openfmr_global_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${SHR_POSTGRES_USER:-shr_admin} -d ${SHR_POSTGRES_DB:-shr_hapi}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # Service 2: HAPI FHIR R4 Clinical Repository
+  # ---------------------------------------------------------------------------
+  # This is the authoritative FHIR server for all shared clinical data
+  # (Encounters, Observations, Conditions, MedicationRequests, etc.).
+  # It is configured via an externally mounted application.yaml file.
+  # ---------------------------------------------------------------------------
+  shr-fhir-server:
+    image: hapiproject/hapi:latest
+    container_name: shr-fhir-server
+    restart: unless-stopped
+    depends_on:
+      shr-postgres:
+        condition: service_healthy
+    ports:
+      - "${SHR_FHIR_PORT:-8084}:8080"
+    volumes:
+      - ./config/hapi-application.yaml:/app/config/application.yaml
+    environment:
+      # Spring Boot picks up /app/config/application.yaml automatically.
+      SPRING_CONFIG_LOCATION: file:///app/config/application.yaml
+    networks:
+      - openfmr_global_net
+
+  # ---------------------------------------------------------------------------
+  # Service 3: Ingestion Engine (FastAPI Gatekeeper)
+  # ---------------------------------------------------------------------------
+  # Validates incoming FHIR Transaction Bundles from external EMR systems
+  # by cross-referencing Patient references against the Client Registry (CR)
+  # and facility references against the Health Facility Registry (HFR).
+  # Only valid bundles are persisted into the local SHR FHIR server.
+  # ---------------------------------------------------------------------------
+  shr-ingestion-engine:
+    build:
+      context: ./ingestion-engine
+      dockerfile: Dockerfile
+    container_name: shr-ingestion-engine
+    restart: unless-stopped
+    depends_on:
+      - shr-fhir-server
+    ports:
+      - "${SHR_INGESTION_PORT:-8085}:8000"
+    environment:
+      # URL of the local SHR FHIR server (internal Docker network).
+      SHR_FHIR_URL: http://shr-fhir-server:8080/fhir
+      # URL of the Client Registry FHIR server for patient validation.
+      CR_FHIR_URL: http://cr-fhir-server:8080/fhir
+      # URL of the Health Facility Registry FHIR server for facility validation.
+      HFR_FHIR_URL: http://hfr-fhir-server:8080/fhir
+      # Network timeout for cross-module FHIR calls (in seconds).
+      FHIR_REQUEST_TIMEOUT: ${FHIR_REQUEST_TIMEOUT:-30}
+    networks:
+      - openfmr_global_net
+
+# =============================================================================
+# Volumes
+# =============================================================================
+volumes:
+  shr-postgres-data:
+    driver: local
+
+# =============================================================================
+# Networks
+# =============================================================================
+# Attach to the shared OpenFMR global network, which is created and managed
+# by the openfmr-core module.
+# =============================================================================
+networks:
+  openfmr_global_net:
+    external: true
