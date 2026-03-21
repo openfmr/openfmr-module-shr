@@ -61,6 +61,12 @@ hapi:
     server_name: "OpenFMR Shared Health Record (SHR)"
     server_id: openfmr-shr
 
+    tester:
+      home:
+        name: OpenFMR SHR
+        server_address: http://shr-fhir-server:8080/fhir
+        fhir_version: R4
+
     # --- Narrative Generation ------------------------------------------------
     narrative_enabled: true
 
