@@ -8,6 +8,8 @@
 # =============================================================================
 
 spring:
+  main:
+    allow-circular-references: true
   datasource:
     # JDBC connection to the co-located shr-postgres container.
     url: jdbc:postgresql://shr-postgres:5432/shr_hapi
@@ -17,8 +19,8 @@ spring:
 
     # HikariCP connection pool — tuned for high-concurrency clinical writes.
     hikari:
-      maximum-pool-size: 50
-      minimum-idle: 10
+      maximum-pool-size: 5
+      minimum-idle: 2
       idle-timeout: 300000       # 5 minutes
       connection-timeout: 30000  # 30 seconds
       max-lifetime: 1800000     # 30 minutes
